@@ -615,6 +615,109 @@ impl PyDAG {
         let neighbors = self.graph.edges_directed(index, dir);
         neighbors.count()
     }
+
+    pub fn compose(
+        &mut self,
+        py: Python,
+        other: &PyDAG,
+        node_map: PyObject,
+        edge_map: PyObject,
+    ) -> PyResult<PyObject> {
+        let mut new_node_map: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let node_map_dict = node_map.cast_as::<PyDict>(py)?;
+        let edge_map_dict = edge_map.cast_as::<PyDict>(py)?;
+
+        let nodes = match algo::toposort(&other, None) {
+            Ok(nodes) => nodes,
+            Err(_err) => {
+                return Err(DAGHasCycle::py_err("Sort encountered a cycle"))
+            }
+        };
+        // TODO: Reimplement this without looping over the graphs
+        for node in nodes {
+            let node_contains = node_map_dict.contains(&node.index())?;
+            if node_contains {
+                if other
+                    .edges_directed(node, petgraph::Direction::Incoming)
+                    .count()
+                    > 0
+                {
+                    return Err(NodeHasParents::py_err(
+                        "Input node of node_map has parents",
+                    ));
+                }
+                let edge_contains = edge_map_dict.contains(node.index())?;
+                if !edge_contains {
+                    return Err(NodeMissingEdge::py_err(
+                        "Input node does not have associate edge",
+                    ));
+                }
+                let new_node =
+                    self.graph.add_node(other.graph[node].clone_ref(py));
+                new_node_map.insert(node, new_node);
+                let lhs_node_index_raw = node_map_dict
+                    .get_item(node.index())
+                    .unwrap()
+                    .downcast::<PyLong>()?;
+                let lhs_node_index: usize = lhs_node_index_raw.extract()?;
+                let lhs_node = NodeIndex::new(lhs_node_index);
+                let edge_data =
+                    edge_map_dict.get_item(node.index()).to_object(py);
+                self.graph.add_edge(lhs_node, new_node, edge_data);
+                let edges = self
+                    .graph
+                    .edges_directed(node, petgraph::Direction::Outgoing);
+                let mut new_edges: Vec<(
+                    EdgeIndex,
+                    NodeIndex,
+                    NodeIndex,
+                    PyObject,
+                )> = Vec::new();
+                for edge in edges {
+                    let target = edge.target();
+                    let edge_weight = edge.weight();
+                    new_edges.push((
+                        edge.id(),
+                        new_node,
+                        target,
+                        edge_weight.clone_ref(py),
+                    ));
+                }
+                for edge in new_edges {
+                    self.graph.add_edge(edge.1, edge.2, edge.3);
+                    self.graph.remove_edge(edge.0);
+                }
+            } else {
+                let new_node =
+                    self.graph.add_node(other.graph[node].clone_ref(py));
+                new_node_map.insert(node, new_node);
+                let edges = other
+                    .graph
+                    .edges_directed(node, petgraph::Direction::Incoming);
+                for edge in edges {
+                    let original_parent = edge.source();
+                    if !new_node_map.contains_key(&original_parent) {
+                        return Err(NodeMissingEdge::py_err(
+                            "Node with edge missing",
+                        ));
+                    }
+                    let new_parent =
+                        new_node_map.get(&original_parent).unwrap();
+                    let edge_weight = edge.weight();
+                    self.graph.add_edge(
+                        *new_parent,
+                        new_node,
+                        edge_weight.clone_ref(py),
+                    );
+                }
+            }
+        }
+        let out_dict = PyDict::new(py);
+        for (orig_node, new_node) in new_node_map.iter() {
+            out_dict.set_item(orig_node.index(), new_node.index())?;
+        }
+        Ok(out_dict.into())
+    }
 }
 
 #[pyproto]
@@ -1039,6 +1142,8 @@ fn retworkx(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 create_exception!(retworkx, DAGWouldCycle, Exception);
 create_exception!(retworkx, NoEdgeBetweenNodes, Exception);
 create_exception!(retworkx, DAGHasCycle, Exception);
+create_exception!(retworkx, NodeHasParents, Exception);
+create_exception!(retworkx, NodeMissingEdge, Exception);
 
 #[cfg(test)]
 mod tests {

@@ -263,6 +263,26 @@ retworkx API
 
         :param int edge: The index of the edge to remove
 
+    .. py:method:: compose(other, node_map, edge_map):
+        Add another PyDAG object into the dag
+
+        :param PyDAG other: The other dag to add
+        :param dict node_map: A dictionary mapping node indexes from the other
+            PyDAG object onto node indexes on this DAG. An edge will be added
+            from the value node index in this PyDAG to the node identified by
+            the key index in the other PyDAG (the node id will change when it
+            is added).
+        :param dict edge_map: A dictionary mapping a node index in other to
+            the edge data to use. THe keys are the node indexes and should
+            match directly with the list of keys on node_map. When an edge
+            is added per the node_map the value for that edge will be from
+            this dictionary.
+
+        :returns: new_node_ids: A dictionary mapping node index from the other
+            PyDAG to the equivalent node index in this PyDAG after they've been
+            combined
+        :rtype: dict
+
 .. _petgraph: https://github.com/bluss/petgraph
 
 .. py:function:: dag_longest_path(graph):
